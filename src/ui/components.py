@@ -16,20 +16,20 @@ def get_ip_badge(chance: str) -> str:
     }
     return badges.get(chance, chance)
 
-def render_vacancy_card(v: dict):
-    """Рендерит одну вакансию внутри выпадающего списка (expander)"""
-    # Парсим JSON с аналитикой ИИ, который мы сохранили в БД
+def render_vacancy_card(v: dict, db):
+    """
+    🟢 Рендерит интерактивную карточку вакансии.
+    Принимает объект бд для мгновенного изменения статусов воронки.
+    """
     try:
         ai = json.loads(v["ai_reasons"])
     except (TypeError, json.JSONDecodeError):
         ai = None
 
-    # Формируем заголовок карточки
     score_label = get_score_badge(v["ai_score"]) if ai else "⏳ Без оценки"
     expander_title = f"{score_label} | {v['name']} ({v['employer_name']})"
     
     with st.expander(expander_title):
-        # Верхняя панель с быстрыми метриками
         col1, col2 = st.columns([2, 3])
         with col1:
             if ai:
@@ -43,16 +43,13 @@ def render_vacancy_card(v: dict):
             st.info("Вакансия еще не проходила ИИ-скрининг. Нажмите кнопку запуска в боковой панели.")
             return
 
-        # Итоговый вердикт ИИ
         st.markdown(f"💡 **Резюме ИИ:** *{ai.get('summary', 'Нет описания')}*")
         st.markdown(f"💼 **Анализ формата оформления:** {ai.get('ip_analysis_reason', '')}")
         
-        # Блок Red Flags (выводим только если они есть)
         red_flags = ai.get("red_flags", [])
         if red_flags:
             st.warning("🚨 **Критические замечания (Red Flags):**\n" + "\n".join([f"- {flag}" for flag in red_flags]))
 
-        # Две колонки: Плюсы и Минусы
         c1, c2 = st.columns(2)
         with c1:
             st.markdown("✅ **Плюсы соответствия:**")
@@ -62,3 +59,21 @@ def render_vacancy_card(v: dict):
             st.markdown("❌ **Минусы / Чего не хватает:**")
             for con in ai.get("cons", []):
                 st.markdown(f"- {con}")
+
+        # 🟢 ДОБАВЛЕНИЕ: Интерактивный блок кнопок управления воронкой соискателя
+        st.markdown("---")
+        b_col1, b_col2, _ = st.columns([1.2, 1.2, 2])
+        
+        with b_col1:
+            # Кнопка отклика
+            if st.button("🚀 Откликнулся", key=f"apply_{v['id']}", use_container_width=True):
+                db.update_user_status(v["id"], "APPLIED")
+                st.toast(f"Статус обновлен: Откликнулся на {v['name']}! 🚀")
+                st.rerun()
+                
+        with b_col2:
+            # Кнопка скрытия
+            if st.button("❌ Не подходит", key=f"reject_{v['id']}", use_container_width=True):
+                db.update_user_status(v["id"], "REJECTED")
+                st.toast(f"Вакансия {v['employer_name']} скрыта из витрины")
+                st.rerun()

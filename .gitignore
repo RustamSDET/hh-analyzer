@@ -1,3 +1,4 @@
 .env
 venv/
 vacancies.db
+vacancies copy.db

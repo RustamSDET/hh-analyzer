@@ -8,9 +8,14 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from src.database import DBManager
-from src.parser import HHWebClient, VacancyDetails
+from src.parser import HHWebClient
 from src.analyzer import run_vacancy_analysis
 from src.ui.components import render_vacancy_card
+
+# Отключаем лишний шум предупреждений библиотек гугла в консоли Streamlit
+import warnings
+warnings.filterwarnings("ignore", category=FutureWarning)
+warnings.filterwarnings("ignore", category=UserWarning)
 
 st.set_page_config(page_title="QA Job AI Analyzer", page_icon="🕵️‍♂️", layout="wide")
 
@@ -30,17 +35,27 @@ st.sidebar.title("🧠 Управление ИИ-Хантером")
 st.sidebar.subheader("📊 Статистика базы")
 total_new = len(db.get_vacancies_by_status("NEW"))
 total_parsed = len(db.get_vacancies_by_status("PARSED"))
-total_analyzed = len(db.get_vacancies_by_status("ANALYZED"))
-total_failed = len(db.get_vacancies_by_status("FAILED"))  # Добавили счетчик упавших
+total_failed = len(db.get_vacancies_by_status("FAILED"))
+analyzed_list = db.get_vacancies_by_status("ANALYZED")
+
+# Подсчитываем статусы воронки среди проанализированных
+total_considering = len([v for v in analyzed_list if v.get("user_status", "CONSIDERING") == "CONSIDERING"])
+total_applied = len([v for v in analyzed_list if v.get("user_status") == "APPLIED"])
+total_rejected = len([v for v in analyzed_list if v.get("user_status") == "REJECTED"])
 
 st.sidebar.text(f"Новые (только ID): {total_new}")
 st.sidebar.text(f"Спарсенные (ожидают ИИ): {total_parsed}")
-st.sidebar.text(f"Упавшие (ошибки ИИ/парса): {total_failed}")
-st.sidebar.text(f"Проанализированные: {total_analyzed}")
+st.sidebar.text(f"Ошибки анализа (FAILED): {total_failed}")
+st.sidebar.markdown("---")
+st.sidebar.subheader("📈 Воронка соискателя")
+st.sidebar.text(f"⏳ На рассмотрении: {total_considering}")
+st.sidebar.text(f"🚀 Откликов отправлено: {total_applied}")
+st.sidebar.text(f"❌ Архив (Не подошли): {total_rejected}")
 st.sidebar.markdown("---")
 
 st.sidebar.subheader("⚙️ Запуск процессов")
 
+# --- КНОПКА 1: СБОР ВАКАНСИЙ ---
 if st.sidebar.button("🔄 1. Собрать вакансии за 24ч", use_container_width=True):
     print("\n==================================================")
     print("[UI BUTTON] Нажата кнопка '1. Собрать вакансии за 24ч'")
@@ -50,29 +65,19 @@ if st.sidebar.button("🔄 1. Собрать вакансии за 24ч", use_co
         log_area = st.sidebar.empty()
         client = HHWebClient()
         
-        print("[UI PATH] >>> Запуск Фазы 1 (Поиск ID) внутри UI...")
-        log_area.caption("Поиск свежих ID...")
         try:
             search_page = client.fetch_vacancies_page(page=0)
-            print("[UI PATH] Фаза 1: Сетевой ответ получен. Парсим структуру...")
-            
             search_result = search_page.get("vacancySearchResult", {})
             found_items = search_result.get("vacancies", [])
             
             print(f"[UI PATH] Фаза 1: Передаем {len(found_items)} вакансий в БД...")
             db.save_discovered_vacancies(found_items)
-            print("[UI PATH] Фаза 1: УСПЕШНО записано в базу данных.")
         except Exception as e:
-            print(f"[UI PATH] 💥 Ошибка на Фазе 1: {e}")
             st.sidebar.error(f"Ошибка поиска: {e}")
             
-        print("\n[UI PATH] >>> Переход к Фазе 2 (Скачивание HTML-описаний)...")
         new_vacancies = db.get_vacancies_by_status("NEW")
-        print(f"[UI PATH] Из базы извлечено {len(new_vacancies)} вакансий в статусе NEW.")
-        
         for idx, v in enumerate(new_vacancies):
             v_id = v["id"]
-            print(f"[UI PATH] Цикл Фазы 2: Обработка {idx+1}/{len(new_vacancies)} (ID: {v_id})")
             log_area.caption(f"Парсинг {idx+1}/{len(new_vacancies)}: ID {v_id}")
             try:
                 raw_details = client.fetch_vacancy_details(v_id)
@@ -82,23 +87,17 @@ if st.sidebar.button("🔄 1. Собрать вакансии за 24ч", use_co
                     key_skills=raw_details.get("key_skills", [])
                 )
             except Exception as e:
-                print(f"[UI PATH] ❌ Ошибка скачивания карточки ID {v_id}: {e}")
                 db.mark_as_failed(v_id)
         
-        print("[UI PATH] 🎉 ВСЕ ФАЗЫ ПАРСИНГА УСПЕШНО ВЫПОЛНЕНЫ!")
         st.sidebar.success("Сбор данных успешно завершен!")
         st.rerun()
 
+# --- КНОПКА 2: ИИ-СКРИНИНГ ---
 if st.sidebar.button("🤖 2. Запустить ИИ-скрининг", use_container_width=True):
-    print("\n==================================================")
-    print("[UI BUTTON] Нажата кнопка '2. Запустить ИИ-скрининг'")
-    print("==================================================")
     if not my_profile_text:
         st.sidebar.error("Сначала создайте файл my_profile.txt в корне!")
     else:
-        # 🟢 ИСПРАВЛЕНИЕ №2: Объединяем списки PARSED и FAILED, давая упавшим вакансиям шанс на перескрининг
         parsed_vacancies = db.get_vacancies_by_status("PARSED") + db.get_vacancies_by_status("FAILED")
-        print(f"[UI PATH] Найдено {len(parsed_vacancies)} вакансий для ИИ-анализа (включая повторные попытки упавших).")
         
         if not parsed_vacancies:
             st.sidebar.info("Нет вакансий для анализа ИИ.")
@@ -107,7 +106,6 @@ if st.sidebar.button("🤖 2. Запустить ИИ-скрининг", use_con
             log_area = st.sidebar.empty()
             
             for idx, v in enumerate(parsed_vacancies):
-                print(f"[UI PATH] ИИ-Анализ {idx+1}/{len(parsed_vacancies)}: {v['name']} ({v['employer_name']})")
                 log_area.caption(f"Анализ {idx+1}/{len(parsed_vacancies)}: {v['name']}")
                 try:
                     ai_result = run_vacancy_analysis(my_profile=my_profile_text, vacancy_data=v)
@@ -121,34 +119,36 @@ if st.sidebar.button("🤖 2. Запустить ИИ-скрининг", use_con
                         "ip_cooperation_chance": ai_result.ip_cooperation_chance
                     }
                     db.update_ai_analysis(v["id"], ai_result.score, json.dumps(details_dict, ensure_ascii=False))
-                    print(f"[UI PATH] -> Оценка {ai_result.score} успешно сохранена.")
                 except Exception as e:
-                    print(f"[UI PATH] ❌ Ошибка выполнения ИИ-модели для ID {v['id']}: {e}")
                     db.mark_as_failed(v["id"])
                     
                 progress_bar.progress((idx + 1) / len(parsed_vacancies))
                 
-            print("[UI PATH] 🎉 ИИ-АНАЛИЗ ВСЕХ ВАКАНСИЙ ЗАВЕРШЕН!")
             st.sidebar.success("ИИ-анализ успешно завершен!")
             st.rerun()
 
 # ==========================================
-# ГЛАВНЫЙ ЭКРАН (Остается без изменений)
+# ГЛАВНЫЙ ЭКРАН: Отображение результатов
 # ==========================================
 st.title("🕵️‍♂️ Персональный ИИ-Скрининг Вакансий")
-tab1, tab2, tab3 = st.tabs(["🔥 Топ Матчи (Оценка 4-5)", "📂 Все проанализированные", "📄 Твое Резюме"])
+tab1, tab2, tab3 = st.tabs(["🔥 Новые Топ Матчи (Оценка 4-5)", "📂 Полный Архив воронки", "📄 Твое Резюме"])
 
 with tab1:
-    st.subheader("Лучшие предложения по вашему стеку и формату ИП")
-    analyzed_list = db.get_vacancies_by_status("ANALYZED")
-    top_matches = [v for v in analyzed_list if v["ai_score"] >= 4]
+    st.subheader("Витрина актуальных предложений (на рассмотрении)")
+    
+    # 🟢 ФИКС: Оставляем на витрине только вакансии с оценкой >= 4, которые соискатель ЕЩЕ НЕ ОБРАБОТАЛ
+    top_matches = [
+        v for v in analyzed_list 
+        if v["ai_score"] >= 4 and v.get("user_status", "CONSIDERING") == "CONSIDERING"
+    ]
     
     if not top_matches:
-        st.info("Пока нет идеальных совпадений. Запустите сбор и анализ вакансий.")
+        st.info("Пока нет новых идеальных совпадений. Все подходящие вакансии обработаны или архив пуст.")
     else:
         top_matches.sort(key=lambda x: x["created_at"], reverse=True)
         for vacancy in top_matches:
-            render_vacancy_card(vacancy)
+            # Передаем объект бд в карточку для работы кнопок
+            render_vacancy_card(vacancy, db)
 
 with tab2:
     st.subheader("Полный архив обработанных вакансий")
@@ -163,12 +163,21 @@ with tab2:
             except Exception:
                 ip_chance = "Error"
                 
+            # Красиво мапим статусы пользователя для интерактивной таблицы
+            u_status = v.get("user_status", "CONSIDERING")
+            status_map = {
+                "CONSIDERING": "⏳ На рассмотрении",
+                "APPLIED": "🚀 Откликнулся",
+                "REJECTED": "❌ Не подходит"
+            }
+                
             table_data.append({
                 "ID": v["id"],
                 "Название": v["name"],
                 "Компания": v["employer_name"],
                 "Оценка ИИ": v["ai_score"],
                 "Шанс ИП": ip_chance,
+                "Статус воронки": status_map.get(u_status, u_status),
                 "Дата сбора": v["created_at"]
             })
         st.dataframe(table_data, use_container_width=True, hide_index=True)

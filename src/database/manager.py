@@ -16,7 +16,7 @@ class DBManager:
         return conn
 
     def _init_db(self):
-        """Создает таблицу vacancies, если её еще нет."""
+        """Создает таблицу vacancies и автоматически проводит миграции новых колонок."""
         with self._get_connection() as conn:
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS vacancies (
@@ -32,6 +32,15 @@ class DBManager:
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
+            
+            # 🟢 АВТО-МИГРАЦИЯ: Безопасно добавляем колонку user_status, если её ещё нет в базе
+            try:
+                conn.execute("ALTER TABLE vacancies ADD COLUMN user_status TEXT DEFAULT 'CONSIDERING'")
+                print("[DB] Миграция успешна: добавлена колонка user_status.")
+            except sqlite3.OperationalError:
+                # Колонка уже существует, игнорируем ошибку
+                pass
+                
             conn.commit()
 
     def save_discovered_vacancies(self, vacancies: List[dict]):
@@ -88,6 +97,19 @@ class DBManager:
                 SET ai_score = ?, ai_reasons = ?, status = 'ANALYZED'
                 WHERE id = ?
             """, (score, reasons, vacancy_id))
+            conn.commit()
+
+    def update_user_status(self, vacancy_id: str, user_status: str):
+        """
+        🟢 БИЗНЕС-ВОРОНКА: Обновляет статус взаимодействия соискателя с вакансией
+        Допустимые значения: CONSIDERING (по умолч.), APPLIED (Откликнулся), REJECTED (Скрыл)
+        """
+        with self._get_connection() as conn:
+            conn.execute("""
+                UPDATE vacancies 
+                SET user_status = ?
+                WHERE id = ?
+            """, (user_status, vacancy_id))
             conn.commit()
 
     def mark_as_failed(self, vacancy_id: str):

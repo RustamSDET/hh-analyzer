@@ -62,7 +62,7 @@ class HHWebClient:
         params = {
             "order_by": "publication_time",
             "ored_clusters": "true",
-            "search_period": 1,
+            "search_period": 3,
             "work_format": "REMOTE",
             "items_on_page": 100,
             "page": page,
