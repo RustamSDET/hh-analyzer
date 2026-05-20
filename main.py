@@ -31,7 +31,6 @@ def main():
         search_result = search_page.get("vacancySearchResult", {})
         found_items = search_result.get("vacancies", [])
         
-        # Передаем объекты целиком, чтобы сохранить имена компаний
         db.save_discovered_vacancies(found_items)
         print(f"[MAIN] Фаза 1 успешно завершена. Обработано вакансий в выдаче: {len(found_items)}")
     except Exception as e:
@@ -49,8 +48,6 @@ def main():
         print(f"[MAIN] Обработка {idx+1}/{len(new_vacancies)}: Скачиваем детали для ID {v_id}")
         try:
             raw_details = client.fetch_vacancy_details(v_id)
-            
-            # Обновляем точечно описание и навыки напрямую из словаря клиента
             db.update_vacancy_details(
                 vacancy_id=v_id,
                 description=raw_details.get("description", ""),
@@ -65,8 +62,9 @@ def main():
     # ФАЗА 3: ИИ-Анализ
     # ========================================================
     print("\n[MAIN] === ЗАПУСК ФАЗЫ 3: ИИ-Скрининг ===")
-    parsed_vacancies = db.get_vacancies_by_status("PARSED")
-    print(f"[MAIN] Вакансий, готовых к ИИ-анализу (статус PARSED): {len(parsed_vacancies)}")
+    # 🟢 ИСПРАВЛЕНИЕ: Тоже берем PARSED + FAILED
+    parsed_vacancies = db.get_vacancies_by_status("PARSED") + db.get_vacancies_by_status("FAILED")
+    print(f"[MAIN] Вакансий, готовых к ИИ-анализу: {len(parsed_vacancies)}")
 
     for v in parsed_vacancies:
         v_id = v["id"]
@@ -74,7 +72,6 @@ def main():
         try:
             ai_result = run_vacancy_analysis(my_profile=my_profile_text, vacancy_data=v)
             
-            # ФИКС ПОДСВЕТКИ: Все поля строго запрашиваем через ai_result.
             details_dict = {
                 "pros": ai_result.pros,
                 "cons": ai_result.cons,

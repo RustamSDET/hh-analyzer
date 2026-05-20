@@ -2,39 +2,30 @@ import os
 from typing import TypedDict, Optional
 from langgraph.graph import StateGraph, START, END
 
-# Возвращаем твои проверенные импорты из langchain_google_genai
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import ChatPromptTemplate
 
 from src.analyzer.prompts import ANALYZE_PROMPT_TEMPLATE
 from src.analyzer.schemas import VacancyMatchingResult
 
-# Явно принуждаем библиотеку использовать Vertex AI
-os.environ["GOOGLE_GENAI_USE_VERTEXAI"] = "1"
-
-# Настройки твоего облачного проекта GCP
-PROJECT_ID = "project-0a1ece04-f585-4dd2-98a" 
-
-# 🟢 ИСПРАВЛЕНИЕ: Меняем "global" на конкретный регион Вертекса.
-# Это заставит коннектор слать запросы в Google Cloud, а не в AI Studio.
-LOCATION = "us-central1" 
+# 🟢 ИСПРАВЛЕНИЕ: Гарантируем правильную конфигурацию переменных среды для SDK v4+
+os.environ["GOOGLE_GENAI_USE_VERTEXAI"] = "true"
+os.environ["GOOGLE_CLOUD_PROJECT"] = "project-0a1ece04-f585-4dd2-98a"
+os.environ["GOOGLE_CLOUD_LOCATION"] = "us-central1"
 
 # Инициализируем модель через твой привычный интерфейс
 llm = ChatGoogleGenerativeAI(
-    model="gemini-3.5-flash", # или "gemini-3.1-pro-preview" в зависимости от доступности в твоем проекте
-    project=PROJECT_ID,
-    location=LOCATION,
-    vertexai=True,
+    model="gemini-3.5-flash", 
+    project=os.environ["GOOGLE_CLOUD_PROJECT"],
+    location=os.environ["GOOGLE_CLOUD_LOCATION"],
+    vertexai=True,  # Принудительное удержание рельс Vertex
     temperature=0.2, 
     max_output_tokens=8192
 )
 
-# Настраиваем строгий структурированный вывод под Pydantic-схему
 analyzer_llm = llm.with_structured_output(VacancyMatchingResult)
 
-
-# === Дальнейшая логика графа LangGraph остается без изменений ===
-
+# === Дальнейшая логика графа LangGraph ===
 class AnalyzerState(TypedDict):
     my_profile: str
     vacancy_name: str
@@ -44,7 +35,6 @@ class AnalyzerState(TypedDict):
     result: Optional[VacancyMatchingResult]
 
 def analyze_vacancy_node(state: AnalyzerState) -> dict:
-    """Узел графа: форматирует промпт, вызывает ИИ и возвращает результат"""
     prompt_messages = ANALYZE_PROMPT_TEMPLATE.format_messages(
         my_profile=state["my_profile"],
         employer_name=state["employer_name"],
