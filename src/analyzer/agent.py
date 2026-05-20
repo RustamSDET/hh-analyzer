@@ -2,30 +2,29 @@ import os
 from typing import TypedDict, Optional
 from langgraph.graph import StateGraph, START, END
 
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_core.prompts import ChatPromptTemplate
+# Импортируем выделенный коннектор для Google Cloud Vertex AI
+from langchain_google_vertexai import ChatVertexAI
 
 from src.analyzer.prompts import ANALYZE_PROMPT_TEMPLATE
 from src.analyzer.schemas import VacancyMatchingResult
 
-# 🟢 ИСПРАВЛЕНИЕ: Гарантируем правильную конфигурацию переменных среды для SDK v4+
-os.environ["GOOGLE_GENAI_USE_VERTEXAI"] = "true"
-os.environ["GOOGLE_CLOUD_PROJECT"] = "project-0a1ece04-f585-4dd2-98a"
-os.environ["GOOGLE_CLOUD_LOCATION"] = "us-central1"
+# Жесткие настройки твоего облачного проекта Google Cloud
+PROJECT_ID = "project-0a1ece04-f585-4dd2-98a" 
+LOCATION = "us-central1" 
 
-# Инициализируем модель через твой привычный интерфейс
-llm = ChatGoogleGenerativeAI(
-    model="gemini-3.5-flash", 
-    project=os.environ["GOOGLE_CLOUD_PROJECT"],
-    location=os.environ["GOOGLE_CLOUD_LOCATION"],
-    vertexai=True,  # Принудительное удержание рельс Vertex
+# Инициализируем модель строго через Vertex AI интерфейс
+llm = ChatVertexAI(
+    model="gemini-1.5-flash", # или gemini-2.5-flash в зависимости от того, что развернуто в GCP
+    project=PROJECT_ID,
+    location=LOCATION,
     temperature=0.2, 
     max_output_tokens=8192
 )
 
+# Настраиваем строгий структурированный вывод под нашу Pydantic схему
 analyzer_llm = llm.with_structured_output(VacancyMatchingResult)
 
-# === Дальнейшая логика графа LangGraph ===
+# --- Логика LangGraph графа остается без изменений ---
 class AnalyzerState(TypedDict):
     my_profile: str
     vacancy_name: str
@@ -35,6 +34,7 @@ class AnalyzerState(TypedDict):
     result: Optional[VacancyMatchingResult]
 
 def analyze_vacancy_node(state: AnalyzerState) -> dict:
+    """Узел графа: форматирует промпт, вызывает ИИ и возвращает результат"""
     prompt_messages = ANALYZE_PROMPT_TEMPLATE.format_messages(
         my_profile=state["my_profile"],
         employer_name=state["employer_name"],
@@ -53,6 +53,7 @@ workflow.add_edge("analyze_vacancy", END)
 analyzer_app = workflow.compile()
 
 def run_vacancy_analysis(my_profile: str, vacancy_data: dict) -> VacancyMatchingResult:
+    """Обертка для запуска анализа вакансии"""
     inputs = {
         "my_profile": my_profile,
         "vacancy_name": vacancy_data.get("name", "Не указано"),
