@@ -34,18 +34,42 @@ class DBManager:
             """)
             conn.commit()
 
-    def save_discovered_ids(self, vacancy_ids: List[str]):
+    def save_discovered_vacancies(self, vacancies: List[dict]):
         """
-        Шаг 1: Сохраняет только ID найденных вакансий со статусом 'NEW'.
-        Если ID уже есть в базе, запрос его просто пропустит (INSERT OR IGNORE).
+        Шаг 1: Принимает сырые объекты вакансий из веб-выдачи.
+        Сохраняет ID, имя, компанию и ссылку. Если дубликат - игнорирует.
         """
         with self._get_connection() as conn:
-            # Подготавливаем кортежи для массовой вставки
-            data = [(v_id, "В процессе...", "NEW") for v_id in vacancy_ids]
+            data = []
+            for v in vacancies:
+                v_id = str(v.get("vacancyId", ""))
+                if not v_id:
+                    continue
+                name = v.get("name", "Не указано")
+                company_dict = v.get("company") or {}
+                employer_name = company_dict.get("name", "Не указан")
+                url = f"https://hh.ru/vacancy/{v_id}"
+                
+                data.append((v_id, name, employer_name, url, "NEW"))
+
             conn.executemany("""
-                INSERT OR IGNORE INTO vacancies (id, name, status) 
-                VALUES (?, ?, ?)
+                INSERT OR IGNORE INTO vacancies (id, name, employer_name, alternate_url, status) 
+                VALUES (?, ?, ?, ?, ?)
             """, data)
+            conn.commit()
+
+    def update_vacancy_details(self, vacancy_id: str, description: str, key_skills: List[str]):
+        """
+        Шаг 2: Дописывает в базу скачанное HTML-описание и навыки,
+        не затирая имя и компанию, сохраненные на Шаге 1.
+        """
+        with self._get_connection() as conn:
+            skills_json = json.dumps(key_skills, ensure_ascii=False)
+            conn.execute("""
+                UPDATE vacancies 
+                SET description = ?, key_skills = ?, status = 'PARSED'
+                WHERE id = ?
+            """, (description, skills_json, vacancy_id))
             conn.commit()
 
     def get_vacancies_by_status(self, status: str) -> List[Dict[str, Any]]:
@@ -53,22 +77,6 @@ class DBManager:
         with self._get_connection() as conn:
             cursor = conn.execute("SELECT * FROM vacancies WHERE status = ?", (status,))
             return [dict(row) for row in cursor.fetchall()]
-
-    def update_vacancy_details(self, vacancy: VacancyDetails):
-        """
-        Шаг 2: Обновляет пустую вакансию скачанными деталями с HH 
-        и переводит статус в 'PARSED'.
-        """
-        with self._get_connection() as conn:
-            # Превращаем список навыков ['Python', 'Git'] в JSON-строку '["Python", "Git"]'
-            skills_json = json.dumps(vacancy.key_skills, ensure_ascii=False)
-            
-            conn.execute("""
-                UPDATE vacancies 
-                SET name = ?, employer_name = ?, description = ?, alternate_url = ?, key_skills = ?, status = 'PARSED'
-                WHERE id = ?
-            """, (vacancy.name, vacancy.employer_name, vacancy.description, vacancy.alternate_url, skills_json, vacancy.id))
-            conn.commit()
 
     def update_ai_analysis(self, vacancy_id: str, score: int, reasons: str):
         """

@@ -64,7 +64,7 @@ class HHWebClient:
             "ored_clusters": "true",
             "search_period": 1,
             "work_format": "REMOTE",
-            "items_on_page": 20,
+            "items_on_page": 100,
             "page": page,
             "search_field": ["name", "company_name", "description"],
             "enable_snippets": "false",
