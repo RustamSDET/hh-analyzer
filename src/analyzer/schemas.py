@@ -1,0 +1,46 @@
+from pydantic import BaseModel, Field
+from typing import List, Literal
+
+class VacancyMatchingResult(BaseModel):
+    """Схема строгого ответа от Gemini для оценки вакансии и шансов работы по ИП"""
+    
+    score: int = Field(
+        ..., 
+        description="Оценка соответствия резюме от 1 до 5, где 5 - идеальный кандидат, 1 - вообще не подходит."
+    )
+    
+    ip_cooperation_chance: Literal["High", "Medium", "Low", "Impossible"] = Field(
+        ...,
+        description=(
+            "Шансы на оформление через ИП/B2B: "
+            "High (прямо указано или мелкая студия), "
+            "Medium (не указано, но компания гибкая), "
+            "Low (крупный ритейл/бизнес, где неохотно идут на это), "
+            "Impossible (Госкомпании РФ, Сбер, ВТБ, Wildberries, где оформление ТОЛЬКО по ТК РФ)."
+        )
+    )
+    
+    ip_analysis_reason: str = Field(
+        ...,
+        description="Краткое объяснение, почему выставлен такой шанс на ИП (упоминание размера компании или явных фраз из текста)."
+    )
+    
+    pros: List[str] = Field(
+        ..., 
+        description="Ключевые плюсы вакансии: совпадения по хард-стеку, процессам, удаленке."
+    )
+    
+    cons: List[str] = Field(
+        ..., 
+        description="Минусы или риски: недостающие технологии, сомнительные требования."
+    )
+    
+    red_flags: List[str] = Field(
+        ..., 
+        description="Критические несоответствия (например: в заголовке удаленка, а в тексте офис; или стек полностью мимо)."
+    )
+    
+    summary: str = Field(
+        ..., 
+        description="Итоговый вердикт одной-двумя емкими фразами."
+    )

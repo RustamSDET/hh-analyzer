@@ -1,0 +1,15 @@
+# Сетевые запросы к API HeadHunter
+requests==2.32.3
+
+# Валидация данных и создание строгих схем
+pydantic==2.10.6
+
+# Управление переменными окружения (.env файлы)
+python-dotenv==1.0.1
+
+# ИИ-оркестратор и интеграция с моделями Google Gemini
+langchain==0.3.14
+langchain-google-genai==2.0.8
+
+streamlit==1.42.0
+langgraph
