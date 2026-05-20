@@ -9,7 +9,7 @@ python-dotenv==1.0.1
 
 # ИИ-оркестратор и интеграция с моделями Google Gemini
 langchain==0.3.14
-langchain-google-genai==2.0.8
+langchain-google-genai==4.0.0
 
 streamlit==1.42.0
 langgraph

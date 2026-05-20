@@ -24,6 +24,7 @@ llm = ChatGoogleGenerativeAI(
     model="gemini-3.5-flash", # или "gemini-3.1-pro-preview" в зависимости от доступности в твоем проекте
     project=PROJECT_ID,
     location=LOCATION,
+    vertexai=True,
     temperature=0.2, 
     max_output_tokens=8192
 )
