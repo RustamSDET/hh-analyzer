@@ -1,0 +1,20 @@
+{
+  "vacancySearchResult": {
+    "vacancies": [
+      {
+        "vacancyId": "999111",
+        "name": "QA Automation Engineer",
+        "company": {
+          "name": "Super Tech Corp"
+        }
+      },
+      {
+        "vacancyId": "999222",
+        "name": "Senior SDET",
+        "company": {
+          "name": "AI Innovations LLC"
+        }
+      }
+    ]
+  }
+}
