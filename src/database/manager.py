@@ -87,6 +87,35 @@ class DBManager:
             cursor = conn.execute("SELECT * FROM vacancies WHERE status = ?", (status,))
             return [dict(row) for row in cursor.fetchall()]
 
+    def get_database_stats(self) -> Dict[str, int]:
+        """
+        Возвращает словарь с количеством вакансий каждого статуса.
+        Выполняется за один быстрый SQL-запрос GROUP BY.
+        """
+        stats = {"NEW": 0, "PARSED": 0, "FAILED": 0, "ANALYZED": 0}
+        with self._get_connection() as conn:
+            cursor = conn.execute("SELECT status, COUNT(*) as cnt FROM vacancies GROUP BY status")
+            for row in cursor.fetchall():
+                status = row["status"]
+                if status in stats:
+                    stats[status] = row["cnt"]
+                else:
+                    stats[status] = row["cnt"]
+        return stats
+
+    def get_analyzed_vacancies_for_ui(self) -> List[Dict[str, Any]]:
+        """
+        Возвращает список проанализированных вакансий без загрузки тяжелых колонок
+        (description, key_skills), что значительно ускоряет работу интерфейса.
+        """
+        with self._get_connection() as conn:
+            cursor = conn.execute("""
+                SELECT id, name, employer_name, alternate_url, status, ai_score, ai_reasons, user_status, created_at
+                FROM vacancies 
+                WHERE status = 'ANALYZED'
+            """)
+            return [dict(row) for row in cursor.fetchall()]
+
     def update_ai_analysis(self, vacancy_id: str, score: int, reasons: str):
         """
         Шаг 3: Записывает вердикт от ИИ и переводит статус в 'ANALYZED'.

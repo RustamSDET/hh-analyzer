@@ -1,4 +1,4 @@
-from typing import TypedDict, Optional
+from typing import TypedDict, Optional, List
 from langgraph.graph import StateGraph, START, END
 from langchain_core.prompts import ChatPromptTemplate
 
@@ -51,3 +51,56 @@ def run_vacancy_analysis(my_profile: str, vacancy_data: dict) -> VacancyMatching
     }
     final_state = analyzer_app.invoke(inputs)
     return final_state["result"]
+
+def run_vacancy_analysis_batch(my_profile: str, vacancies_data: List[dict], batch_size: int = 10) -> List[tuple]:
+    """
+    Пакетный ИИ-анализ списка вакансий пачками по batch_size штук.
+    Принимает список сырых вакансий из БД.
+    Возвращает список кортежей (vacancy_data, VacancyMatchingResult или None).
+    """
+    results = []
+    
+    for i in range(0, len(vacancies_data), batch_size):
+        chunk = vacancies_data[i:i + batch_size]
+        print(f"\n[AI BATCH] Отправка пакета {i//batch_size + 1}: {len(chunk)} вакансий...")
+        
+        inputs_list = []
+        for v in chunk:
+            # Превращаем key_skills (хранящиеся в БД как JSON-строка) в строку через запятую для промпта
+            skills_raw = v.get("key_skills", "")
+            skills_str = ""
+            if skills_raw:
+                try:
+                    import json
+                    skills_list = json.loads(skills_raw) if isinstance(skills_raw, str) else skills_raw
+                    skills_str = ", ".join(skills_list) if isinstance(skills_list, list) else str(skills_list)
+                except Exception:
+                    skills_str = str(skills_raw)
+
+            inputs_list.append({
+                "my_profile": my_profile,
+                "vacancy_name": v.get("name", "Не указано"),
+                "employer_name": v.get("employer_name", "Не указано"),
+                "key_skills": skills_str,
+                "vacancy_description": v.get("description", "")
+            })
+            
+        # Запускаем батч параллельно с ограничением concurrency
+        # return_exceptions=True возвращает объект Exception вместо выброса ошибки
+        batch_outputs = analyzer_app.batch(
+            inputs_list,
+            config={"max_concurrency": batch_size},
+            return_exceptions=True
+        )
+        
+        for v, out in zip(chunk, batch_outputs):
+            if isinstance(out, Exception):
+                print(f"[AI BATCH] ❌ Ошибка при анализе вакансии ID {v['id']}: {out}")
+                results.append((v, None))
+            elif out and "result" in out:
+                results.append((v, out["result"]))
+            else:
+                print(f"[AI BATCH] ⚠️ Неизвестный ответ для вакансии ID {v['id']}: {out}")
+                results.append((v, None))
+                
+    return results

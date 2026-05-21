@@ -9,7 +9,7 @@ if PROJECT_ROOT not in sys.path:
 
 from src.database import DBManager
 from src.parser import HHWebClient
-from src.analyzer import run_vacancy_analysis
+from src.analyzer import run_vacancy_analysis, run_vacancy_analysis_batch
 from src.ui.components import render_vacancy_card
 
 # Отключаем лишний шум предупреждений библиотек гугла в консоли Streamlit
@@ -33,12 +33,17 @@ if os.path.exists(PROFILE_PATH):
 st.sidebar.title("🧠 Управление ИИ-Хантером")
 
 st.sidebar.subheader("📊 Статистика базы")
-total_new = len(db.get_vacancies_by_status("NEW"))
-total_parsed = len(db.get_vacancies_by_status("PARSED"))
-total_failed = len(db.get_vacancies_by_status("FAILED"))
-analyzed_list = db.get_vacancies_by_status("ANALYZED")
 
-# Подсчитываем статусы воронки среди проанализированных
+# 🟢 ОПТИМИЗАЦИЯ: Один легкий запрос статистики вместо 4 раздельных тяжелых запросов
+db_stats = db.get_database_stats()
+total_new = db_stats.get("NEW", 0)
+total_parsed = db_stats.get("PARSED", 0)
+total_failed = db_stats.get("FAILED", 0)
+
+# 🟢 ОПТИМИЗАЦИЯ: Загружаем только легкие метаданные без полей descriptions/key_skills
+analyzed_list = db.get_analyzed_vacancies_for_ui()
+
+# Подсчитываем статусы воронки среди проанализированных (в памяти, мгновенно)
 total_considering = len([v for v in analyzed_list if v.get("user_status", "CONSIDERING") == "CONSIDERING"])
 total_applied = len([v for v in analyzed_list if v.get("user_status") == "APPLIED"])
 total_rejected = len([v for v in analyzed_list if v.get("user_status") == "REJECTED"])
@@ -105,24 +110,42 @@ if st.sidebar.button("🤖 2. Запустить ИИ-скрининг", use_con
             progress_bar = st.sidebar.progress(0.0)
             log_area = st.sidebar.empty()
             
-            for idx, v in enumerate(parsed_vacancies):
-                log_area.caption(f"Анализ {idx+1}/{len(parsed_vacancies)}: {v['name']}")
-                try:
-                    ai_result = run_vacancy_analysis(my_profile=my_profile_text, vacancy_data=v)
-                    
-                    details_dict = {
-                        "pros": ai_result.pros,
-                        "cons": ai_result.cons,
-                        "red_flags": ai_result.red_flags,
-                        "summary": ai_result.summary,
-                        "ip_analysis_reason": ai_result.ip_analysis_reason,
-                        "ip_cooperation_chance": ai_result.ip_cooperation_chance
-                    }
-                    db.update_ai_analysis(v["id"], ai_result.score, json.dumps(details_dict, ensure_ascii=False))
-                except Exception as e:
-                    db.mark_as_failed(v["id"])
-                    
-                progress_bar.progress((idx + 1) / len(parsed_vacancies))
+            # Разделяем на пачки по 10 штук для плавного UI-прогресса
+            chunk_size = 10
+            total_vacancies = len(parsed_vacancies)
+            
+            for i in range(0, total_vacancies, chunk_size):
+                chunk = parsed_vacancies[i:i + chunk_size]
+                log_area.caption(f"Анализ пачки {i//chunk_size + 1}: {len(chunk)} вакансий...")
+                
+                # Запускаем батч ИИ-скрининга (до 10 штук параллельно)
+                batch_results = run_vacancy_analysis_batch(
+                    my_profile=my_profile_text,
+                    vacancies_data=chunk,
+                    batch_size=chunk_size
+                )
+                
+                for v, ai_result in batch_results:
+                    v_id = v["id"]
+                    if ai_result is None:
+                        db.mark_as_failed(v_id)
+                        continue
+                    try:
+                        details_dict = {
+                            "pros": ai_result.pros,
+                            "cons": ai_result.cons,
+                            "red_flags": ai_result.red_flags,
+                            "summary": ai_result.summary,
+                            "ip_analysis_reason": ai_result.ip_analysis_reason,
+                            "ip_cooperation_chance": ai_result.ip_cooperation_chance
+                        }
+                        db.update_ai_analysis(v_id, ai_result.score, json.dumps(details_dict, ensure_ascii=False))
+                    except Exception:
+                        db.mark_as_failed(v_id)
+                
+                # Обновляем прогресс бар
+                progress = min((i + chunk_size) / total_vacancies, 1.0)
+                progress_bar.progress(progress)
                 
             st.sidebar.success("ИИ-анализ успешно завершен!")
             st.rerun()

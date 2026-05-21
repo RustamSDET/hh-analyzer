@@ -3,7 +3,7 @@ import json
 import logging
 from src.parser import HHWebClient
 from src.database import DBManager
-from src.analyzer import run_vacancy_analysis
+from src.analyzer import run_vacancy_analysis, run_vacancy_analysis_batch
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -66,27 +66,37 @@ def main():
     parsed_vacancies = db.get_vacancies_by_status("PARSED") + db.get_vacancies_by_status("FAILED")
     print(f"[MAIN] Вакансий, готовых к ИИ-анализу: {len(parsed_vacancies)}")
 
-    for v in parsed_vacancies:
-        v_id = v["id"]
-        print(f"[MAIN] Отправка в Gemini: {v['name']} в компании {v['employer_name']}")
-        try:
-            ai_result = run_vacancy_analysis(my_profile=my_profile_text, vacancy_data=v)
-            
-            details_dict = {
-                "pros": ai_result.pros,
-                "cons": ai_result.cons,
-                "red_flags": ai_result.red_flags,
-                "summary": ai_result.summary,
-                "ip_analysis_reason": ai_result.ip_analysis_reason,
-                "ip_cooperation_chance": ai_result.ip_cooperation_chance
-            }
-            
-            print(f"[MAIN] Сохранение вердикта ИИ (Оценка: {ai_result.score}) в БД...")
-            db.update_ai_analysis(v_id, ai_result.score, json.dumps(details_dict, ensure_ascii=False))
-            print(f"[MAIN] ✅ Вакансия {v_id} успешно проанализирована.")
-        except Exception as e:
-            print(f"[MAIN] ❌ Ошибка анализа ИИ для ID {v_id}: {e}")
-            db.mark_as_failed(v_id)
+    if parsed_vacancies:
+        # Запускаем пакетный анализ (по 10 штук за раз)
+        batch_results = run_vacancy_analysis_batch(
+            my_profile=my_profile_text, 
+            vacancies_data=parsed_vacancies, 
+            batch_size=10
+        )
+        
+        for v, ai_result in batch_results:
+            v_id = v["id"]
+            if ai_result is None:
+                print(f"[MAIN] ❌ Пропуск или ошибка анализа ИИ для ID {v_id}. Помечаем как FAILED.")
+                db.mark_as_failed(v_id)
+                continue
+                
+            try:
+                details_dict = {
+                    "pros": ai_result.pros,
+                    "cons": ai_result.cons,
+                    "red_flags": ai_result.red_flags,
+                    "summary": ai_result.summary,
+                    "ip_analysis_reason": ai_result.ip_analysis_reason,
+                    "ip_cooperation_chance": ai_result.ip_cooperation_chance
+                }
+                
+                print(f"[MAIN] Сохранение вердикта ИИ (Оценка: {ai_result.score}) в БД для {v['name']}...")
+                db.update_ai_analysis(v_id, ai_result.score, json.dumps(details_dict, ensure_ascii=False))
+                print(f"[MAIN] ✅ Вакансия {v_id} успешно проанализирована.")
+            except Exception as e:
+                print(f"[MAIN] ❌ Ошибка сохранения вердикта ИИ для ID {v_id}: {e}")
+                db.mark_as_failed(v_id)
 
     print("\n[MAIN] 🎉 Работа пайплайна main.py ПОЛНОСТЬЮ ЗАВЕРШЕНА!")
 
