@@ -10,7 +10,7 @@ if PROJECT_ROOT not in sys.path:
 from src.database import DBManager
 from src.parser import HHWebClient
 from src.analyzer import run_vacancy_analysis, run_vacancy_analysis_batch
-from src.ui.components import render_vacancy_card
+from src.ui.components import render_vacancy_card, render_archive_vacancy_card, get_ip_badge
 
 # Отключаем лишний шум предупреждений библиотек гугла в консоли Streamlit
 import warnings
@@ -20,6 +20,12 @@ warnings.filterwarnings("ignore", category=UserWarning)
 st.set_page_config(page_title="QA Job AI Analyzer", page_icon="🕵️‍♂️", layout="wide")
 
 db = DBManager()
+
+# Инициализируем переменные состояния для безопасного управления диалогом
+if "table_key_version" not in st.session_state:
+    st.session_state["table_key_version"] = 0
+if "selected_vacancy" not in st.session_state:
+    st.session_state["selected_vacancy"] = None
 
 PROFILE_PATH = "my_profile.txt"
 my_profile_text = ""
@@ -151,6 +157,79 @@ if st.sidebar.button("🤖 2. Запустить ИИ-скрининг", use_con
             st.rerun()
 
 # ==========================================
+# 💬 ВСПЛЫВАЮЩЕЕ ОКНО ДЕТАЛЕЙ С JSON ОТ ИИ
+# ==========================================
+@st.dialog("📋 Детали вакансии и ИИ-анализ", width="large")
+def show_vacancy_dialog(v: dict):
+    try:
+        ai = json.loads(v["ai_reasons"])
+    except (TypeError, json.JSONDecodeError):
+        ai = None
+
+    st.subheader(v["name"])
+    st.markdown(f"**Работодатель:** {v['employer_name']}")
+    st.markdown(f"🔗 **Ссылка на HH.ru:** [{v['alternate_url']}]({v['alternate_url']})")
+    st.markdown(f"📅 **Дата сбора:** {v['created_at']}")
+    st.markdown("---")
+
+    if not ai:
+        st.info("Эта вакансия еще не проходила ИИ-скрининг.")
+    else:
+        st.markdown(f"💡 **Резюме ИИ:** *{ai.get('summary', 'Нет описания')}*")
+        st.markdown(f"💼 **Анализ формата оформления:** {ai.get('ip_analysis_reason', '')}")
+        if ai.get("ip_cooperation_chance"):
+            st.markdown(f"🎯 **Шансы работы по ИП:** `{get_ip_badge(ai.get('ip_cooperation_chance'))}`")
+            
+        red_flags = ai.get("red_flags", [])
+        if red_flags:
+            st.warning("🚨 **Критические замечания (Red Flags):**\n" + "\n".join([f"- {flag}" for flag in red_flags]))
+
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown("✅ **Плюсы соответствия:**")
+            for pro in ai.get("pros", []):
+                st.markdown(f"- {pro}")
+        with c2:
+            st.markdown("❌ **Минусы / Чего не хватает:**")
+            for con in ai.get("cons", []):
+                st.markdown(f"- {con}")
+
+        st.markdown("---")
+        st.markdown("📂 **Распарсенный JSON от ИИ:**")
+        st.json(ai)
+
+    st.markdown("---")
+    
+    # Смена статуса внутри диалога
+    status_options = ["⏳ На рассмотрении", "🚀 Откликнулся", "❌ Не подходит"]
+    status_keys = ["CONSIDERING", "APPLIED", "REJECTED"]
+    u_status = v.get("user_status", "CONSIDERING")
+    try:
+        current_index = status_keys.index(u_status)
+    except ValueError:
+        current_index = 0
+
+    selected_label = st.selectbox(
+        "Изменить статус воронки:",
+        options=status_options,
+        index=current_index,
+        key=f"dialog_status_select_{v['id']}"
+    )
+
+    new_status = status_keys[status_options.index(selected_label)]
+    if new_status != u_status:
+        db.update_user_status(v["id"], new_status)
+        st.toast(f"Статус вакансии '{v['name']}' изменен на: {selected_label}! 🎯")
+        st.rerun()
+
+# Если в состоянии сессии есть выбранная вакансия, показываем диалог
+if st.session_state["selected_vacancy"] is not None:
+    vacancy_to_show = st.session_state["selected_vacancy"]
+    # Очищаем сессионную переменную сразу, чтобы диалог не открылся повторно
+    st.session_state["selected_vacancy"] = None
+    show_vacancy_dialog(vacancy_to_show)
+
+# ==========================================
 # ГЛАВНЫЙ ЭКРАН: Отображение результатов
 # ==========================================
 st.title("🕵️‍♂️ Персональный ИИ-Скрининг Вакансий")
@@ -174,36 +253,169 @@ with tab1:
             render_vacancy_card(vacancy, db)
 
 with tab2:
-    st.subheader("Полный архив обработанных вакансий")
+    st.subheader("📁 Интерактивный архив обработанных вакансий")
+    
+    # Кнопка ручного обновления данных
+    if st.button("🔄 Обновить данные", key="btn_refresh_archive", use_container_width=True):
+        st.rerun()
+        
     if not analyzed_list:
         st.info("Архив пуст.")
     else:
-        table_data = []
-        for v in analyzed_list:
-            try:
-                ai_data = json.loads(v["ai_reasons"])
-                ip_chance = ai_data.get("ip_cooperation_chance", "Medium")
-            except Exception:
-                ip_chance = "Error"
-                
-            # Красиво мапим статусы пользователя для интерактивной таблицы
-            u_status = v.get("user_status", "CONSIDERING")
-            status_map = {
-                "CONSIDERING": "⏳ На рассмотрении",
-                "APPLIED": "🚀 Откликнулся",
-                "REJECTED": "❌ Не подходит"
+        # --- ПАНЕЛЬ ФИЛЬТРОВ ---
+        st.markdown("### 🔍 Панель быстрого поиска и фильтрации")
+        
+        search_keyword = st.text_input(
+            "Поиск по названию вакансии или имени работодателя:",
+            placeholder="Введите ключевые слова...",
+            key="archive_search"
+        )
+        
+        f_col1, f_col2, f_col3 = st.columns(3)
+        with f_col1:
+            score_filter = st.selectbox(
+                "Оценка соответствия ИИ:",
+                options=["Все", "5", "4", "3", "2", "1"],
+                key="archive_score_filter"
+            )
+        with f_col2:
+            status_filter = st.selectbox(
+                "Текущий статус воронки:",
+                options=["Все", "⏳ На рассмотрении", "🚀 Откликнулся", "❌ Не подходит"],
+                key="archive_status_filter"
+            )
+        with f_col3:
+            ip_filter = st.selectbox(
+                "Шансы оформления по ИП/B2B:",
+                options=["Все", "🚀 Высокий (B2B/ИП)", "⚡️ Средний (Надо уточнять)", "⚠️ Низкий (Скорее всего ТК)", "🚫 Только ТК РФ"],
+                key="archive_ip_filter"
+            )
+            
+        st.markdown("---")
+
+        # --- ФИЛЬТРАЦИЯ ДАННЫХ ---
+        filtered_list = analyzed_list
+        
+        # 1. Текстовый поиск
+        if search_keyword:
+            kw = search_keyword.lower().strip()
+            filtered_list = [
+                v for v in filtered_list
+                if kw in v["name"].lower() or kw in v["employer_name"].lower()
+            ]
+            
+        # 2. По оценке ИИ
+        if score_filter != "Все":
+            target_score = int(score_filter)
+            filtered_list = [v for v in filtered_list if v["ai_score"] == target_score]
+            
+        # 3. По статусу пользователя
+        if status_filter != "Все":
+            status_map_keys = {
+                "⏳ На рассмотрении": "CONSIDERING",
+                "🚀 Откликнулся": "APPLIED",
+                "❌ Не подходит": "REJECTED"
             }
+            target_status = status_map_keys[status_filter]
+            filtered_list = [v for v in filtered_list if v.get("user_status", "CONSIDERING") == target_status]
+            
+        # 4. По шансу ИП
+        if ip_filter != "Все":
+            ip_chance_map = {
+                "🚀 Высокий (B2B/ИП)": "High",
+                "⚡️ Средний (Надо уточнять)": "Medium",
+                "⚠️ Низкий (Скорее всего ТК)": "Low",
+                "🚫 Только ТК РФ": "Impossible"
+            }
+            target_ip = ip_chance_map[ip_filter]
+            
+            filtered_list_with_ip = []
+            for v in filtered_list:
+                try:
+                    ai_data = json.loads(v["ai_reasons"])
+                    chance = ai_data.get("ip_cooperation_chance", "Medium")
+                except Exception:
+                    chance = "Medium"
+                if chance == target_ip:
+                    filtered_list_with_ip.append(v)
+            filtered_list = filtered_list_with_ip
+
+        # --- СОРТИРОВКА И ВЫВОД РЕЗУЛЬТАТОВ ---
+        filtered_list.sort(key=lambda x: x["created_at"], reverse=True)
+        total_found = len(filtered_list)
+        
+        st.write(f"Найдено вакансий по фильтрам: **{total_found}**")
+        
+        if total_found == 0:
+            st.info("Нет вакансий, соответствующих заданным критериям фильтрации.")
+        else:
+            # Формируем плоский список словарей для таблицы st.dataframe
+            table_data = []
+            for v in filtered_list:
+                # Достаем шанс ИП из ai_reasons
+                try:
+                    ai_data = json.loads(v["ai_reasons"])
+                    ip_chance = ai_data.get("ip_cooperation_chance", "Medium")
+                except Exception:
+                    ip_chance = "Medium"
                 
-            table_data.append({
-                "ID": v["id"],
-                "Название": v["name"],
-                "Компания": v["employer_name"],
-                "Оценка ИИ": v["ai_score"],
-                "Шанс ИП": ip_chance,
-                "Статус воронки": status_map.get(u_status, u_status),
-                "Дата сбора": v["created_at"]
-            })
-        st.dataframe(table_data, use_container_width=True, hide_index=True)
+                # Форматируем шанс ИП на русском языке
+                ip_badge = get_ip_badge(ip_chance)
+                
+                # Форматируем статус воронки на русском языке
+                u_status = v.get("user_status", "CONSIDERING")
+                status_label_map = {
+                    "CONSIDERING": "⏳ На рассмотрении",
+                    "APPLIED": "🚀 Откликнулся",
+                    "REJECTED": "❌ Не подходит"
+                }
+                status_label = status_label_map.get(u_status, u_status)
+                
+                # Форматируем оценку ИИ
+                ai_score_val = v.get("ai_score")
+                score_label = f"⭐ {ai_score_val}/5" if ai_score_val is not None else "⏳ Без оценки"
+                
+                table_data.append({
+                    "ID": v["id"],
+                    "Название": v["name"],
+                    "Компания": v["employer_name"],
+                    "Оценка ИИ": score_label,
+                    "Шанс ИП": ip_badge,
+                    "Статус воронки": status_label,
+                    "Дата сбора": v["created_at"]
+                })
+            
+            # Отображаем плоскую интерактивную таблицу с динамическим ключом
+            selection = st.dataframe(
+                table_data,
+                on_select="rerun",
+                selection_mode="single-row",
+                key=f"archive_table_{st.session_state['table_key_version']}",
+                width="stretch"
+            )
+            
+            # Безопасное извлечение выделенных строк из st.dataframe
+            rows = []
+            if selection is not None:
+                if hasattr(selection, "selection"):
+                    sel_dict = selection.selection
+                    if isinstance(sel_dict, dict) and "rows" in sel_dict:
+                        rows = sel_dict["rows"]
+                    elif hasattr(sel_dict, "rows"):
+                        rows = sel_dict.rows
+                elif isinstance(selection, dict) and "selection" in selection:
+                    sel_dict = selection["selection"]
+                    if isinstance(sel_dict, dict) and "rows" in sel_dict:
+                        rows = sel_dict["rows"]
+            
+            if rows:
+                selected_row_idx = rows[0]
+                v = filtered_list[selected_row_idx]
+                
+                # Записываем в session_state и увеличиваем версию ключа таблицы для сброса выделения
+                st.session_state["selected_vacancy"] = v
+                st.session_state["table_key_version"] += 1
+                st.rerun()
 
 with tab3:
     st.subheader("Профиль кандидата (из my_profile.txt)")
