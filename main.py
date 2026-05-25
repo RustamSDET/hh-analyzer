@@ -40,12 +40,21 @@ def main():
     # ФАЗА 2: Скачивание описаний
     # ========================================================
     print("\n[MAIN] === ЗАПУСК ФАЗЫ 2: Детальный парсинг HTML ===")
-    new_vacancies = db.get_vacancies_by_status("NEW")
-    print(f"[MAIN] Найдено в БД вакансий в статусе NEW: {len(new_vacancies)}")
-
-    for idx, v in enumerate(new_vacancies):
+    import random
+    import time
+    
+    vacancies_to_parse = db.get_vacancies_for_parsing()
+    print(f"[MAIN] Найдено в БД вакансий, требующих парсинга деталей: {len(vacancies_to_parse)}")
+ 
+    for idx, v in enumerate(vacancies_to_parse):
         v_id = v["id"]
-        print(f"[MAIN] Обработка {idx+1}/{len(new_vacancies)}: Скачиваем детали для ID {v_id}")
+        print(f"[MAIN] Обработка {idx+1}/{len(vacancies_to_parse)}: Скачиваем детали для ID {v_id}")
+        
+        if idx > 0:
+            delay = random.uniform(2.0, 5.0)
+            print(f"[MAIN] Пауза {delay:.2f} сек. для предотвращения бана...")
+            time.sleep(delay)
+            
         try:
             raw_details = client.fetch_vacancy_details(v_id)
             db.update_vacancy_details(
@@ -57,13 +66,14 @@ def main():
         except Exception as e:
             print(f"[MAIN] ❌ Не удалось обработать вакансию ID {v_id}: {e}")
             db.mark_as_failed(v_id)
-
+ 
     # ========================================================
     # ФАЗА 3: ИИ-Анализ
     # ========================================================
     print("\n[MAIN] === ЗАПУСК ФАЗЫ 3: ИИ-Скрининг ===")
-    # 🟢 ИСПРАВЛЕНИЕ: Тоже берем PARSED + FAILED
-    parsed_vacancies = db.get_vacancies_by_status("PARSED") + db.get_vacancies_by_status("FAILED")
+    # Берем PARSED + FAILED, но только те, у которых есть непустое описание (чтобы не анализировать пустые вакансии)
+    all_candidates = db.get_vacancies_by_status("PARSED") + db.get_vacancies_by_status("FAILED")
+    parsed_vacancies = [v for v in all_candidates if v.get("description") and v["description"].strip()]
     print(f"[MAIN] Вакансий, готовых к ИИ-анализу: {len(parsed_vacancies)}")
 
     if parsed_vacancies:
@@ -88,11 +98,21 @@ def main():
                     "red_flags": ai_result.red_flags,
                     "summary": ai_result.summary,
                     "ip_analysis_reason": ai_result.ip_analysis_reason,
-                    "ip_cooperation_chance": ai_result.ip_cooperation_chance
+                    "ip_cooperation_chance": ai_result.ip_cooperation_chance,
+                    "grade_score": ai_result.grade_score,
+                    "remote_chance": ai_result.remote_chance,
+                    "stack_score": ai_result.stack_score
                 }
                 
                 print(f"[MAIN] Сохранение вердикта ИИ (Оценка: {ai_result.score}) в БД для {v['name']}...")
-                db.update_ai_analysis(v_id, ai_result.score, json.dumps(details_dict, ensure_ascii=False))
+                db.update_ai_analysis(
+                    v_id, 
+                    ai_result.score, 
+                    ai_result.grade_score, 
+                    ai_result.remote_chance, 
+                    ai_result.stack_score, 
+                    json.dumps(details_dict, ensure_ascii=False)
+                )
                 print(f"[MAIN] ✅ Вакансия {v_id} успешно проанализирована.")
             except Exception as e:
                 print(f"[MAIN] ❌ Ошибка сохранения вердикта ИИ для ID {v_id}: {e}")

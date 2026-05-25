@@ -16,6 +16,32 @@ def get_ip_badge(chance: str) -> str:
     }
     return badges.get(chance, chance)
 
+def get_grade_badge(score: int) -> str:
+    """Возвращает форматированную строку для соответствия грейду"""
+    if score is None:
+        return "⏳ N/A"
+    colors = {5: "🎯", 4: "⚡", 3: "⚙️", 2: "⚠️", 1: "🚨"}
+    return f"{colors.get(score, '⚪')} {score}/5"
+
+def get_stack_badge(score: int) -> str:
+    """Возвращает форматированную строку для соответствия технологическому стеку"""
+    if score is None:
+        return "⏳ N/A"
+    colors = {5: "🔥", 4: "💻", 3: "🧩", 2: "🔌", 1: "❌"}
+    return f"{colors.get(score, '⚪')} {score}/5"
+
+def get_remote_badge(chance: str) -> str:
+    """Возвращает понятный статус для возможности удаленной работы"""
+    if chance is None:
+        return "⏳ N/A"
+    badges = {
+        "Да": "📶 Да (Удаленка)",
+        "Высокий шанс": "🌐 Высокий шанс",
+        "Низкий шанс": "🏢 Низкий шанс / Гибрид",
+        "Нет": "❌ Нет (Только офис)"
+    }
+    return badges.get(chance, chance)
+
 def render_vacancy_card(v: dict, db):
     """
     🟢 Рендерит интерактивную карточку вакансии.
@@ -30,19 +56,27 @@ def render_vacancy_card(v: dict, db):
     expander_title = f"{score_label} | {v['name']} ({v['employer_name']})"
     
     with st.expander(expander_title):
-        col1, col2 = st.columns([2, 3])
-        with col1:
-            if ai:
-                st.markdown(f"**Шансы на ИП:**\n`{get_ip_badge(ai.get('ip_cooperation_chance'))}`")
-        with col2:
-            st.markdown(f"**Ссылка на вакансию:**\n[{v['alternate_url']}]({v['alternate_url']})")
-            
-        st.markdown("---")
-        
         if not ai:
             st.info("Вакансия еще не проходила ИИ-скрининг. Нажмите кнопку запуска в боковой панели.")
+            st.markdown(f"🔗 **Ссылка на вакансию:** [{v['alternate_url']}]({v['alternate_url']})")
             return
 
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.markdown(f"**Шансы на ИП:**\n`{get_ip_badge(ai.get('ip_cooperation_chance'))}`")
+        with col2:
+            grade_val = v.get("ai_grade_score") or ai.get("grade_score")
+            st.markdown(f"**Грейд кандидата:**\n`{get_grade_badge(grade_val)}`")
+        with col3:
+            stack_val = v.get("ai_stack_score") or ai.get("stack_score")
+            st.markdown(f"**Соответствие стеку:**\n`{get_stack_badge(stack_val)}`")
+        with col4:
+            remote_val = v.get("ai_remote_chance") or ai.get("remote_chance")
+            st.markdown(f"**Удаленная работа:**\n`{get_remote_badge(remote_val)}`")
+            
+        st.markdown(f"🔗 **Ссылка на вакансию:** [{v['alternate_url']}]({v['alternate_url']})")
+        st.markdown("---")
+        
         st.markdown(f"💡 **Резюме ИИ:** *{ai.get('summary', 'Нет описания')}*")
         st.markdown(f"💼 **Анализ формата оформления:** {ai.get('ip_analysis_reason', '')}")
         
@@ -135,6 +169,20 @@ def render_archive_vacancy_card(v: dict, db):
             st.info("Вакансия еще не проходила ИИ-скрининг.")
             return
 
+        col_badge1, col_badge2, col_badge3, col_badge4 = st.columns(4)
+        with col_badge1:
+            st.markdown(f"**Шансы на ИП:**\n`{get_ip_badge(ai.get('ip_cooperation_chance'))}`")
+        with col_badge2:
+            grade_val = v.get("ai_grade_score") or ai.get("grade_score")
+            st.markdown(f"**Грейд кандидата:**\n`{get_grade_badge(grade_val)}`")
+        with col_badge3:
+            stack_val = v.get("ai_stack_score") or ai.get("stack_score")
+            st.markdown(f"**Соответствие стеку:**\n`{get_stack_badge(stack_val)}`")
+        with col_badge4:
+            remote_val = v.get("ai_remote_chance") or ai.get("remote_chance")
+            st.markdown(f"**Удаленная работа:**\n`{get_remote_badge(remote_val)}`")
+
+        st.markdown("---")
         st.markdown(f"💡 **Резюме ИИ:** *{ai.get('summary', 'Нет описания')}*")
         st.markdown(f"💼 **Анализ формата оформления:** {ai.get('ip_analysis_reason', '')}")
         if ai.get("ip_cooperation_chance"):

@@ -40,6 +40,25 @@ class DBManager:
             except sqlite3.OperationalError:
                 # Колонка уже существует, игнорируем ошибку
                 pass
+
+            # 🟢 АВТО-МИГРАЦИЯ: Безопасно добавляем новые колонки ИИ-оценок
+            try:
+                conn.execute("ALTER TABLE vacancies ADD COLUMN ai_grade_score INTEGER")
+                print("[DB] Миграция успешна: добавлена колонка ai_grade_score.")
+            except sqlite3.OperationalError:
+                pass
+
+            try:
+                conn.execute("ALTER TABLE vacancies ADD COLUMN ai_remote_chance TEXT")
+                print("[DB] Миграция успешна: добавлена колонка ai_remote_chance.")
+            except sqlite3.OperationalError:
+                pass
+
+            try:
+                conn.execute("ALTER TABLE vacancies ADD COLUMN ai_stack_score INTEGER")
+                print("[DB] Миграция успешна: добавлена колонка ai_stack_score.")
+            except sqlite3.OperationalError:
+                pass
                 
             conn.commit()
 
@@ -87,6 +106,16 @@ class DBManager:
             cursor = conn.execute("SELECT * FROM vacancies WHERE status = ?", (status,))
             return [dict(row) for row in cursor.fetchall()]
 
+    def get_vacancies_for_parsing(self) -> List[Dict[str, Any]]:
+        """Возвращает вакансии, требующие парсинга деталей (NEW или FAILED без сохраненного описания)."""
+        with self._get_connection() as conn:
+            cursor = conn.execute("""
+                SELECT * FROM vacancies 
+                WHERE status = 'NEW' 
+                   OR (status = 'FAILED' AND (description IS NULL OR description = ''))
+            """)
+            return [dict(row) for row in cursor.fetchall()]
+
     def get_database_stats(self) -> Dict[str, int]:
         """
         Возвращает словарь с количеством вакансий каждого статуса.
@@ -110,22 +139,24 @@ class DBManager:
         """
         with self._get_connection() as conn:
             cursor = conn.execute("""
-                SELECT id, name, employer_name, alternate_url, status, ai_score, ai_reasons, user_status, created_at
+                SELECT id, name, employer_name, alternate_url, status, 
+                       ai_score, ai_grade_score, ai_remote_chance, ai_stack_score, 
+                       ai_reasons, user_status, created_at
                 FROM vacancies 
                 WHERE status = 'ANALYZED'
             """)
             return [dict(row) for row in cursor.fetchall()]
 
-    def update_ai_analysis(self, vacancy_id: str, score: int, reasons: str):
+    def update_ai_analysis(self, vacancy_id: str, score: int, grade_score: int, remote_chance: str, stack_score: int, reasons: str):
         """
         Шаг 3: Записывает вердикт от ИИ и переводит статус в 'ANALYZED'.
         """
         with self._get_connection() as conn:
             conn.execute("""
                 UPDATE vacancies 
-                SET ai_score = ?, ai_reasons = ?, status = 'ANALYZED'
+                SET ai_score = ?, ai_grade_score = ?, ai_remote_chance = ?, ai_stack_score = ?, ai_reasons = ?, status = 'ANALYZED'
                 WHERE id = ?
-            """, (score, reasons, vacancy_id))
+            """, (score, grade_score, remote_chance, stack_score, reasons, vacancy_id))
             conn.commit()
 
     def update_user_status(self, vacancy_id: str, user_status: str):

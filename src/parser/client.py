@@ -63,7 +63,7 @@ class HHWebClient:
             "order_by": "publication_time",
             "ored_clusters": "true",
             "search_period": 3,
-            "work_format": "REMOTE",
+            #"work_format": "REMOTE",
             "items_on_page": 100,
             "page": page,
             "search_field": ["name", "company_name", "description"],

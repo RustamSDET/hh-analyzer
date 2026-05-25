@@ -10,7 +10,14 @@ if PROJECT_ROOT not in sys.path:
 from src.database import DBManager
 from src.parser import HHWebClient
 from src.analyzer import run_vacancy_analysis, run_vacancy_analysis_batch
-from src.ui.components import render_vacancy_card, render_archive_vacancy_card, get_ip_badge
+from src.ui.components import (
+    render_vacancy_card, 
+    render_archive_vacancy_card, 
+    get_ip_badge,
+    get_grade_badge,
+    get_stack_badge,
+    get_remote_badge
+)
 
 # Отключаем лишний шум предупреждений библиотек гугла в консоли Streamlit
 import warnings
@@ -86,10 +93,17 @@ if st.sidebar.button("🔄 1. Собрать вакансии за 24ч", use_co
         except Exception as e:
             st.sidebar.error(f"Ошибка поиска: {e}")
             
-        new_vacancies = db.get_vacancies_by_status("NEW")
-        for idx, v in enumerate(new_vacancies):
+        import random
+        import time
+        vacancies_to_parse = db.get_vacancies_for_parsing()
+        for idx, v in enumerate(vacancies_to_parse):
             v_id = v["id"]
-            log_area.caption(f"Парсинг {idx+1}/{len(new_vacancies)}: ID {v_id}")
+            log_area.caption(f"Парсинг {idx+1}/{len(vacancies_to_parse)}: ID {v_id}")
+            
+            if idx > 0:
+                delay = random.uniform(2.0, 5.0)
+                time.sleep(delay)
+                
             try:
                 raw_details = client.fetch_vacancy_details(v_id)
                 db.update_vacancy_details(
@@ -108,7 +122,8 @@ if st.sidebar.button("🤖 2. Запустить ИИ-скрининг", use_con
     if not my_profile_text:
         st.sidebar.error("Сначала создайте файл my_profile.txt в корне!")
     else:
-        parsed_vacancies = db.get_vacancies_by_status("PARSED") + db.get_vacancies_by_status("FAILED")
+        all_candidates = db.get_vacancies_by_status("PARSED") + db.get_vacancies_by_status("FAILED")
+        parsed_vacancies = [v for v in all_candidates if v.get("description") and v["description"].strip()]
         
         if not parsed_vacancies:
             st.sidebar.info("Нет вакансий для анализа ИИ.")
@@ -143,9 +158,19 @@ if st.sidebar.button("🤖 2. Запустить ИИ-скрининг", use_con
                             "red_flags": ai_result.red_flags,
                             "summary": ai_result.summary,
                             "ip_analysis_reason": ai_result.ip_analysis_reason,
-                            "ip_cooperation_chance": ai_result.ip_cooperation_chance
+                            "ip_cooperation_chance": ai_result.ip_cooperation_chance,
+                            "grade_score": ai_result.grade_score,
+                            "remote_chance": ai_result.remote_chance,
+                            "stack_score": ai_result.stack_score
                         }
-                        db.update_ai_analysis(v_id, ai_result.score, json.dumps(details_dict, ensure_ascii=False))
+                        db.update_ai_analysis(
+                            v_id, 
+                            ai_result.score, 
+                            ai_result.grade_score, 
+                            ai_result.remote_chance, 
+                            ai_result.stack_score, 
+                            json.dumps(details_dict, ensure_ascii=False)
+                        )
                     except Exception:
                         db.mark_as_failed(v_id)
                 
@@ -175,10 +200,22 @@ def show_vacancy_dialog(v: dict):
     if not ai:
         st.info("Эта вакансия еще не проходила ИИ-скрининг.")
     else:
+        col_d1, col_d2, col_d3, col_d4 = st.columns(4)
+        with col_d1:
+            st.markdown(f"**Шансы на ИП:**\n`{get_ip_badge(ai.get('ip_cooperation_chance'))}`")
+        with col_d2:
+            grade_val = v.get("ai_grade_score") or ai.get("grade_score")
+            st.markdown(f"**Грейд кандидата:**\n`{get_grade_badge(grade_val)}`")
+        with col_d3:
+            stack_val = v.get("ai_stack_score") or ai.get("stack_score")
+            st.markdown(f"**Соответствие стеку:**\n`{get_stack_badge(stack_val)}`")
+        with col_d4:
+            remote_val = v.get("ai_remote_chance") or ai.get("remote_chance")
+            st.markdown(f"**Удаленная работа:**\n`{get_remote_badge(remote_val)}`")
+            
+        st.markdown("---")
         st.markdown(f"💡 **Резюме ИИ:** *{ai.get('summary', 'Нет описания')}*")
         st.markdown(f"💼 **Анализ формата оформления:** {ai.get('ip_analysis_reason', '')}")
-        if ai.get("ip_cooperation_chance"):
-            st.markdown(f"🎯 **Шансы работы по ИП:** `{get_ip_badge(ai.get('ip_cooperation_chance'))}`")
             
         red_flags = ai.get("red_flags", [])
         if red_flags:
@@ -274,7 +311,7 @@ with tab2:
         f_col1, f_col2, f_col3 = st.columns(3)
         with f_col1:
             score_filter = st.selectbox(
-                "Оценка соответствия ИИ:",
+                "Оценка соответствия ИИ (Общая):",
                 options=["Все", "5", "4", "3", "2", "1"],
                 key="archive_score_filter"
             )
@@ -289,6 +326,26 @@ with tab2:
                 "Шансы оформления по ИП/B2B:",
                 options=["Все", "🚀 Высокий (B2B/ИП)", "⚡️ Средний (Надо уточнять)", "⚠️ Низкий (Скорее всего ТК)", "🚫 Только ТК РФ"],
                 key="archive_ip_filter"
+            )
+            
+        f_col4, f_col5, f_col6 = st.columns(3)
+        with f_col4:
+            grade_filter = st.selectbox(
+                "Соответствие грейду:",
+                options=["Все", "5", "4", "3", "2", "1"],
+                key="archive_grade_filter"
+            )
+        with f_col5:
+            stack_filter = st.selectbox(
+                "Соответствие стеку:",
+                options=["Все", "5", "4", "3", "2", "1"],
+                key="archive_stack_filter"
+            )
+        with f_col6:
+            remote_filter = st.selectbox(
+                "Удаленная работа:",
+                options=["Все", "📶 Да (Удаленка)", "🌐 Высокий шанс", "🏢 Низкий шанс / Гибрид", "❌ Нет (Только офис)"],
+                key="archive_remote_filter"
             )
             
         st.markdown("---")
@@ -340,6 +397,57 @@ with tab2:
                     filtered_list_with_ip.append(v)
             filtered_list = filtered_list_with_ip
 
+        # 5. По соответствию грейду
+        if grade_filter != "Все":
+            target_grade = int(grade_filter)
+            filtered_list_with_grade = []
+            for v in filtered_list:
+                val = v.get("ai_grade_score")
+                if val is None and v.get("ai_reasons"):
+                    try:
+                        val = json.loads(v["ai_reasons"]).get("grade_score")
+                    except Exception:
+                        pass
+                if val == target_grade:
+                    filtered_list_with_grade.append(v)
+            filtered_list = filtered_list_with_grade
+
+        # 6. По соответствию стеку
+        if stack_filter != "Все":
+            target_stack = int(stack_filter)
+            filtered_list_with_stack = []
+            for v in filtered_list:
+                val = v.get("ai_stack_score")
+                if val is None and v.get("ai_reasons"):
+                    try:
+                        val = json.loads(v["ai_reasons"]).get("stack_score")
+                    except Exception:
+                        pass
+                if val == target_stack:
+                    filtered_list_with_stack.append(v)
+            filtered_list = filtered_list_with_stack
+
+        # 7. По удаленной работе
+        if remote_filter != "Все":
+            remote_map = {
+                "📶 Да (Удаленка)": "Да",
+                "🌐 Высокий шанс": "Высокий шанс",
+                "🏢 Низкий шанс / Гибрид": "Низкий шанс",
+                "❌ Нет (Только офис)": "Нет"
+            }
+            target_remote = remote_map[remote_filter]
+            filtered_list_with_remote = []
+            for v in filtered_list:
+                val = v.get("ai_remote_chance")
+                if val is None and v.get("ai_reasons"):
+                    try:
+                        val = json.loads(v["ai_reasons"]).get("remote_chance")
+                    except Exception:
+                        pass
+                if val == target_remote:
+                    filtered_list_with_remote.append(v)
+            filtered_list = filtered_list_with_remote
+
         # --- СОРТИРОВКА И ВЫВОД РЕЗУЛЬТАТОВ ---
         filtered_list.sort(key=lambda x: x["created_at"], reverse=True)
         total_found = len(filtered_list)
@@ -354,9 +462,10 @@ with tab2:
             for v in filtered_list:
                 # Достаем шанс ИП из ai_reasons
                 try:
-                    ai_data = json.loads(v["ai_reasons"])
+                    ai_data = json.loads(v["ai_reasons"]) if v.get("ai_reasons") else {}
                     ip_chance = ai_data.get("ip_cooperation_chance", "Medium")
                 except Exception:
+                    ai_data = {}
                     ip_chance = "Medium"
                 
                 # Форматируем шанс ИП на русском языке
@@ -375,11 +484,23 @@ with tab2:
                 ai_score_val = v.get("ai_score")
                 score_label = f"⭐ {ai_score_val}/5" if ai_score_val is not None else "⏳ Без оценки"
                 
+                grade_val = v.get("ai_grade_score") or ai_data.get("grade_score")
+                grade_label = f"🎯 {grade_val}/5" if grade_val is not None else "⏳ N/A"
+                
+                stack_val = v.get("ai_stack_score") or ai_data.get("stack_score")
+                stack_label = f"💻 {stack_val}/5" if stack_val is not None else "⏳ N/A"
+                
+                remote_val = v.get("ai_remote_chance") or ai_data.get("remote_chance")
+                remote_label = f"📶 {remote_val}" if remote_val is not None else "⏳ N/A"
+                
                 table_data.append({
                     "ID": v["id"],
                     "Название": v["name"],
                     "Компания": v["employer_name"],
-                    "Оценка ИИ": score_label,
+                    "Общая оценка ИИ": score_label,
+                    "Грейд": grade_label,
+                    "Стек": stack_label,
+                    "Удаленка": remote_label,
                     "Шанс ИП": ip_badge,
                     "Статус воронки": status_label,
                     "Дата сбора": v["created_at"]
